@@ -6,6 +6,7 @@ import 'package:flutter_hooks/flutter_hooks.dart';
 import 'package:flutter_reactive_ble/flutter_reactive_ble.dart';
 import 'package:motion_toast/motion_toast.dart';
 import 'package:motion_toast/resources/arrays.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'package:simple_animations/simple_animations.dart';
 
 void main() {
@@ -25,8 +26,25 @@ class RootApp extends StatelessWidget {
   }
 }
 
-class CheckBluetoothStateScreen extends StatelessWidget {
+class CheckBluetoothStateScreen extends StatefulWidget {
   const CheckBluetoothStateScreen({Key? key}) : super(key: key);
+
+  @override
+  State<CheckBluetoothStateScreen> createState() =>
+      _CheckBluetoothStateScreenState();
+}
+
+class _CheckBluetoothStateScreenState extends State<CheckBluetoothStateScreen> {
+  @override
+  void initState() {
+    super.initState();
+    [
+      Permission.bluetooth,
+      Permission.bluetoothConnect,
+      Permission.bluetoothScan,
+      Permission.location,
+    ].request();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -47,7 +65,8 @@ class CheckBluetoothStateScreen extends StatelessWidget {
             body: Center(
               child: Text(
                 'Bluetooth đang không hoạt động, vui lòng bật bluetooth'
-                '\n Err: $state',
+                '\nErr: $state',
+                textAlign: TextAlign.center,
               ),
             ),
           );
@@ -361,4 +380,3 @@ class PulseAnimationIcon extends StatelessWidget {
     );
   }
 }
-
