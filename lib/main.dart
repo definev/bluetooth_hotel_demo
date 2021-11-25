@@ -2,8 +2,10 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
-import 'package:flutter_bluetooth_serial/flutter_bluetooth_serial.dart';
 import 'package:flutter_hooks/flutter_hooks.dart';
+import 'package:flutter_reactive_ble/flutter_reactive_ble.dart';
+import 'package:motion_toast/motion_toast.dart';
+import 'package:motion_toast/resources/arrays.dart';
 import 'package:simple_animations/simple_animations.dart';
 
 void main() {
@@ -28,31 +30,27 @@ class CheckBluetoothStateScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return FutureBuilder<BluetoothState>(
-        future: FlutterBluetoothSerial.instance.state,
-        builder: (context, snapshot) {
-          if (snapshot.data == null) {
-            return const Center(child: CircularProgressIndicator());
+    return StreamBuilder<BleStatus>(
+        stream: FlutterReactiveBle().statusStream,
+        initialData: FlutterReactiveBle().status,
+        builder: (c, snapshot) {
+          final state = snapshot.data;
+          Future(() {
+            ScaffoldMessenger.of(c).removeCurrentSnackBar();
+            ScaffoldMessenger.of(c)
+                .showSnackBar(SnackBar(content: Text('Trạng thái: $state')));
+          });
+          if (state == BleStatus.ready) {
+            return const HomePage();
           }
-          return StreamBuilder<BluetoothState>(
-              stream: FlutterBluetoothSerial.instance.onStateChanged(),
-              initialData: snapshot.data,
-              builder: (c, snapshot) {
-                final state = snapshot.data;
-                Future(() {
-                  ScaffoldMessenger.of(c).removeCurrentSnackBar();
-                  ScaffoldMessenger.of(c).showSnackBar(
-                      SnackBar(content: Text('Trạng thái: $state')));
-                });
-                if (state == BluetoothState.STATE_ON) {
-                  return const HomePage();
-                }
-                return const Scaffold(
-                  body: Center(
-                      child: Text(
-                          'Bluetooth đang không hoạt động, vui lòng bật bluetooth')),
-                );
-              });
+          return Scaffold(
+            body: Center(
+              child: Text(
+                'Bluetooth đang không hoạt động, vui lòng bật bluetooth'
+                '\n Err: $state',
+              ),
+            ),
+          );
         });
   }
 }
@@ -63,38 +61,39 @@ class HomePage extends HookWidget {
   @override
   Widget build(BuildContext context) {
     final lockState = useState(true);
-    final _connection = useState<BluetoothConnection?>(null);
+    final flutterReactiveBle = useMemoized(() => FlutterReactiveBle());
+    final _connection = useState<DiscoveredDevice?>(null);
 
     final _scanning = useCallback(() async {
-      final device = await showModalBottomSheet(
-        context: context,
-        builder: (context) => const ScanDeviceScreen(),
+      flutterReactiveBle.scanForDevices(withServices: [
+        Uuid.parse('0000aaaa-ead2-11e7-80c1-9a214cf093ae'),
+      ]).listen(
+        (scanResult) {
+          MotionToast(
+            icon: Icons.bluetooth_connected_outlined,
+            color: Colors.green,
+            title: "Đã tìm thấy thiết bị kết nối ngay?",
+            description: "Another motion toast example",
+            position: MOTION_TOAST_POSITION.TOP,
+            animationType: ANIMATION.FROM_TOP,
+            onClose: () {
+              flutterReactiveBle
+                  .connectToDevice(id: scanResult.id)
+                  .listen((event) {
+                if (event.connectionState == DeviceConnectionState.connected) {
+                  _connection.value = scanResult;
+                } else {
+                  _connection.value = null;
+                }
+              });
+            },
+          ).show(context);
+        },
       );
-      if (device != null) {
-        showDialog(
-          context: context,
-          builder: (context) => const Center(
-              child: SizedBox(
-            height: 100,
-            width: 100,
-            child: CircularProgressIndicator(),
-          )),
-        );
-        BluetoothConnection.toAddress(device.address).then((connection) {
-          _connection.value = connection;
-          Navigator.pop(context);
-          ScaffoldMessenger.of(context).removeCurrentSnackBar();
-          ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('Kết nối thành công')));
-          lockState.value = false;
-        }).catchError((error) {
-          _connection.value = null;
-          Navigator.pop(context);
-          ScaffoldMessenger.of(context).removeCurrentSnackBar();
-          ScaffoldMessenger.of(context)
-              .showSnackBar(const SnackBar(content: Text('Kết nối thất bại')));
-        });
-      }
+    }, []);
+
+    useEffect(() {
+      WidgetsBinding.instance!.addPostFrameCallback((_) => _scanning());
     }, []);
 
     return Scaffold(
@@ -178,10 +177,24 @@ class HomePage extends HookWidget {
                       _scanning();
                       return;
                     }
+
+                    final characteristic = QualifiedCharacteristic(
+                      serviceId:
+                          Uuid.parse('0000aaaa-ead2-11e7-80c1-9a214cf093ae'),
+                      characteristicId:
+                          Uuid.parse('00005555-ead2-11e7-80c1-9a214cf093ae'),
+                      deviceId: _connection.value!.id,
+                    );
                     if (lockState.value) {
-                      _connection.value!.output.add(ascii.encode('open'));
+                      flutterReactiveBle.writeCharacteristicWithoutResponse(
+                        characteristic,
+                        value: utf8.encode('open'),
+                      );
                     } else {
-                      _connection.value!.output.add(ascii.encode('lock'));
+                      flutterReactiveBle.writeCharacteristicWithoutResponse(
+                        characteristic,
+                        value: utf8.encode('lock'),
+                      );
                     }
                     lockState.value = !lockState.value;
                   },
@@ -349,37 +362,3 @@ class PulseAnimationIcon extends StatelessWidget {
   }
 }
 
-class ScanDeviceScreen extends StatelessWidget {
-  const ScanDeviceScreen({Key? key}) : super(key: key);
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('Tìm kiếm thiết bị')),
-      body: FutureBuilder<List<BluetoothDevice>>(
-        future: FlutterBluetoothSerial.instance.getBondedDevices(),
-        builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.waiting) {
-            return const Center(child: CircularProgressIndicator());
-          }
-          if (snapshot.hasData) {
-            final devices = snapshot.data!;
-            return ListView.builder(
-              itemBuilder: (context, index) {
-                final BluetoothDevice device = devices[index];
-                return ListTile(
-                  leading: const Icon(Icons.bluetooth),
-                  title: Text(device.name ?? 'Không tên'),
-                  subtitle: Text(device.address),
-                  onTap: () => Navigator.of(context).pop(device),
-                );
-              },
-              itemCount: devices.length,
-            );
-          }
-          return const Center(child: Text('Lỗi không tìm thấy thiết bị'));
-        },
-      ),
-    );
-  }
-}
